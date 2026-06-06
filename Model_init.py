@@ -18,7 +18,7 @@ from transformers import (
 SMILES_START = "<|start_of_smiles|>"
 SMILES_END = "<|end_of_smiles|>"
 
-def setup_model(model_id="allenai/OLMo-7B-hf", new_tokenizer_id="Codemaster67/OLMO_Smiles_aware_tokenizer", token_file="spe_codes.txt") -> AutoModelForCausalLM:
+def setup_model(model_id="allenai/OLMo-7B-hf", new_tokenizer_id="Codemaster67/Olmo_spe_tokenizer_300SPE_TOKENS", token_file="spe_codes.txt") -> AutoModelForCausalLM:
 
     print("Loading tokenizers and model...")
     base_tokenizer = AutoTokenizer.from_pretrained(model_id,trust_remote_code=True,)
@@ -73,12 +73,12 @@ def setup_model(model_id="allenai/OLMo-7B-hf", new_tokenizer_id="Codemaster67/OL
 
 model , tokenizer = setup_model()   
 
-repo_id = "Codemaster67/Olmo-7b-spe-200ksmiles-10-smiles_text-30kchempapers"
+repo_id = "Codemaster67/Olmo-7b-spe"
 print("Pushing to Hub...")
 
-# model.push_to_hub(
-#     repo_id,
-# )
+model.push_to_hub(
+    repo_id,
+)
 
 # tokenizer.push_to_hub(repo_id)
 
