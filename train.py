@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-DATASET_NAME = "Codemaster67/Causal_lm_chemistry_1M_rows"          # ChEBI-20 multi-modal
+DATASET_NAME = "Codemaster67/Causal_lm_chemistry_1M_rows"         
 OUTPUT_DIR = "./olmo_chem_lora_cpt_LoRA_r64_alpha128"
 HF_REPO_ID = "Codemaster67/Olmo-7b_1M_Smiles_lora" # This is where the final model will be pushed
 SEED = 42
@@ -390,15 +390,6 @@ def main():
         logger.info("Running final evaluation...")
         final_metrics = trainer.evaluate()
 
-    # ── Summary ──
-    print("\n" + "=" * 70)
-    print(f"  Dataset:             {DATASET_NAME}")
-    print(f"  SMILES tokens:       {SMILES_START} / {SMILES_END}")
-    print(f"  Epochs:              {NUM_EPOCHS}")
-    print(f"  Learning rate:       {LEARNING_RATE}")
-    print(f"  Effective batch:     {BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}")
-    print(f"  HuggingFace repo:    {HF_REPO_ID}")
-    print("-" * 70)
 
     baseline_ppl = baseline_metrics.get("eval_perplexity", "N/A")
     final_ppl = final_metrics.get("eval_perplexity", "N/A")
