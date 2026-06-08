@@ -169,10 +169,10 @@ def prepare_pubmed(n: int = 30_000) -> Dataset:
 def build_and_push(hub_repo: str = "Codemaster67/Causal_lm_chemistry"):
     random.seed(42)
 
-    unichem_ds  = prepare_unichem(400_000)
+    unichem_ds  = prepare_unichem(1_000_000)
     chemrxiv_ds = prepare_chemrxiv(30_000)
-    chebi_ds    = prepare_chebi20(100_000)
-    pubmed_ds   = prepare_pubmed(10_000)
+    chebi_ds    = prepare_chebi20(500_000)
+    pubmed_ds   = prepare_pubmed(20_000)
 
     log.info("Combining datasets …")
     combined = concatenate_datasets([unichem_ds, chemrxiv_ds, chebi_ds, pubmed_ds])
@@ -191,7 +191,7 @@ def build_and_push(hub_repo: str = "Codemaster67/Causal_lm_chemistry"):
     dataset_dict.push_to_hub(
         hub_repo,
         private=False,          # set True if you want it private
-        commit_message="Add 300k UniChem SMILES + 30k ChemRxiv + 30k PubMed + 10k ChEBI-20 pairs ",
+        commit_message="Added dataset",
     )
 
     return dataset_dict
