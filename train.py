@@ -6,7 +6,7 @@ import logging
 from functools import partial
 from itertools import chain
 
-from datasets import load_dataset
+from datasets import load_dataset , DatasetDict
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -16,6 +16,10 @@ from transformers import (
     set_seed,
 )
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
+import rdkit
+
+
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +50,7 @@ BASE_MODEL = "Codemaster67/Olmo-7b-spe"
 
 SMILES_START = "<|start_of_smiles|>"
 SMILES_END = "<|end_of_smiles|>"
-
+EOS = "<|endoftext|>"
 
 def setup_tokenizer(tokenizer_id = "Codemaster67/Olmo-7b-spe") -> AutoTokenizer:
     """Load tokenizer."""
@@ -58,46 +62,67 @@ def setup_tokenizer(tokenizer_id = "Codemaster67/Olmo-7b-spe") -> AutoTokenizer:
     return tokenizer
 
 
+def augment_smiles(smiles, num_augmentations=10):
+    """
+    Generates random SMILES augmentations for a given SMILES string.
+    """
+
+    smiles = smiles.replace("<|start_of_smiles|>", "").replace("<|end_of_smiles|>", "")
+    mol = rdkit.Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return [smiles]  
+
+    augmented_set = set()
+    attempts = 0
+    max_attempts = num_augmentations * 2  # Prevent infinite loops if diversity is low
+
+    # Generate random SMILES until we have 10 unique ones
+    while len(augmented_set) < num_augmentations and attempts < max_attempts:
+        rand_smiles = rdkit.Chem.MolToSmiles(mol, doRandom=True)
+        augmented_set.add(rand_smiles)
+        attempts += 1
+
+    del mol 
+    return list(augmented_set)
 
 
-def setup_model(model_id=BASE_MODEL) -> AutoModelForCausalLM:
+
+def setup_model(model_id=BASE_MODEL,lora=True):
     logger.info(f"Loading base model in bfloat16: {model_id}")
+    
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  # Requires flash attention libraray (pip install flash-attn --no-cache-dir --no-build-isolation)
     )
-    
-    peft_config = LoraConfig(
-        r=64,
-        lora_alpha=128,
-        target_modules="all-linear", 
-        lora_dropout=0.01,
-        bias="none",
-        use_rslora=True, 
-        task_type=TaskType.CAUSAL_LM,
-    )
-    
-    logger.info("Applying LoRA adapter configuration...")
-    model = get_peft_model(model, peft_config)
-
-    # Explicitly unfreeze base layers to ensure SPE tokens tune cleanly
-    logger.info("Manually setting requires_grad = True for embed_tokens and lm_head...")
-    
-    if hasattr(model.base_model.model, 'model') and hasattr(model.base_model.model.model, 'embed_tokens'):
-        model.base_model.model.model.embed_tokens.weight.requires_grad = True
-    elif hasattr(model.base_model.model, 'embed_tokens'):
-        model.base_model.model.embed_tokens.weight.requires_grad = True
+    if lora:
+        peft_config = LoraConfig(
+            r=64,
+            lora_alpha=128,
+            target_modules="all-linear", 
+            lora_dropout=0.01,
+            bias="none",
+            use_rslora=True, 
+            task_type=TaskType.CAUSAL_LM,
+        )
         
-    if hasattr(model.base_model.model, 'lm_head'):
-        model.base_model.model.lm_head.weight.requires_grad = True
+        logger.info("Applying LoRA adapter configuration...")
+        model = get_peft_model(model, peft_config)
+        
+        if hasattr(model.base_model.model, 'model') and hasattr(model.base_model.model.model, 'embed_tokens'):
+            model.base_model.model.model.embed_tokens.weight.requires_grad = True
+        elif hasattr(model.base_model.model, 'embed_tokens'):
+            model.base_model.model.embed_tokens.weight.requires_grad = True
+            
+        if hasattr(model.base_model.model, 'lm_head'):
+            model.base_model.model.lm_head.weight.requires_grad = True
 
-    # Print out confirmations to logs
-    for name, param in model.named_parameters():
-        if "embed_tokens" in name or "lm_head" in name:
-            param.requires_grad = True
-            logger.info(f" -> Enforced trainable: {name} ({param.dtype})")
+        # Print out confirmations to logs
+        for name, param in model.named_parameters():
+            if "embed_tokens" in name or "lm_head" in name:
+                param.requires_grad = True
+                logger.info(f" -> Enforced trainable: {name} ({param.dtype})")
 
     model.print_trainable_parameters()
     return model
@@ -105,8 +130,7 @@ def setup_model(model_id=BASE_MODEL) -> AutoModelForCausalLM:
 
 
 def tokenize_function(examples: dict, tokenizer: AutoTokenizer) -> dict:
-    """Tokenize text ."""
-    # Add EOS to each example so the model learns sequence boundaries
+    "Tokenize text "
     texts = [t for t in examples["text"]] #For some reason olmo's tokenizer adds a default eos to end
     return tokenizer(
         texts,
@@ -163,40 +187,60 @@ def pack_sequences(tokenized_dataset, tokenizer, max_seq_length: int):
 
 def prepare_datasets(tokenizer: AutoTokenizer):
 
-    dataset = load_dataset(DATASET_NAME)
+
+    full_dataset = load_dataset(DATASET_NAME,split ="train+test") 
+
+    shuffled_dataset = full_dataset.shuffle(seed=SEED)
 
 
+    split_dataset = shuffled_dataset.train_test_split(test_size=0.1, seed=SEED)
+    train_dataset = split_dataset["train"]
+    val_dataset = split_dataset["test"]
 
-    # Seed RNG for reproducibility before formatting
+    Source_name = "unichem" #dataset contains 2 cols , text and source 
+
+    def format_smiles(example):
+        input_smiles = example["text"] if example["source"] == Source_name else ""
+        if input_smiles != "":
+            augmented_list = augment_smiles(input_smiles)
+            formatted_smiles = [f"{SMILES_START}{smiles}{SMILES_END}{EOS}" for smiles in augmented_list]
+            formatted_smiles.append(input_smiles) #add original 
+            example["text"] = "".join(formatted_smiles) 
+        return example
+
+    train_dataset = train_dataset.map(format_smiles, num_proc=4, desc="Formatting smiles")
     random.seed(SEED)
 
 
     logger.info("Tokenizing...")
     tokenize_fn = partial(tokenize_function, tokenizer=tokenizer)
+
+    dataset = DatasetDict({
+        "train": train_dataset,
+        "test": val_dataset
+    })
+
     tokenized = dataset.map(
         tokenize_fn,
         batched=True,
         batch_size=1000,
         num_proc=4,
-        remove_columns=["text"],
+        remove_columns=["text","source"],
         desc="Tokenizing",
     )
 
     # Pack sequences for efficient training
     logger.info(f"Packing sequences to length {MAX_SEQ_LENGTH}...")
     train_packed = pack_sequences(tokenized["train"], tokenizer, MAX_SEQ_LENGTH)
-    val_packed = pack_sequences(tokenized["validation"], tokenizer, MAX_SEQ_LENGTH)
+    val_packed = pack_sequences(tokenized["test"], tokenizer, MAX_SEQ_LENGTH)
 
     logger.info(f"Packed training sequences:   {len(train_packed)}")
     logger.info(f"Packed validation sequences: {len(val_packed)}")
 
     # Log a sample to verify formatting
     sample_ids = train_packed[0]["input_ids"][:200]
-    sample_mask = train_packed[0]["attention_mask"][:200]
     logger.info(f"Sample packed text (first 200 tokens):\n{tokenizer.decode(sample_ids)}")
 
-    print("sample attention mask \n")
-    print(sample_mask)
     return train_packed, val_packed
 
 
@@ -386,9 +430,9 @@ def main():
             f"Merged model saved locally at {MERGED_DIR}"
         )
 
-        # ── Final evaluation ──
-        logger.info("Running final evaluation...")
-        final_metrics = trainer.evaluate()
+    # ── Final evaluation ──
+    logger.info("Running final evaluation...")
+    final_metrics = trainer.evaluate()
 
 
     baseline_ppl = baseline_metrics.get("eval_perplexity", "N/A")
