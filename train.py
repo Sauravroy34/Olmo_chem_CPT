@@ -18,8 +18,7 @@ from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 import rdkit
 import wandb
 
-# We don't need this env variable anymore since we are initializing wandb manually
-# os.environ["WANDB_PROJECT"] = "Olmo_run" 
+
 os.environ["WANDB_LOG_MODEL"] = "false" 
 
 DATASET_NAME = "Codemaster67/Causal_lm_chemistry_1M_rows"         
@@ -37,14 +36,16 @@ WEIGHT_DECAY = 0.01
 LOGGING_STEPS = 10
 EVAL_STEPS = 50                             
 SAVE_STEPS = 100
+
 AUGMENT = True
 NUM_AUGMENT = 4  
 
-USE_SUBSET = True  
-
+USE_SUBSET = True # if set to false then whole training dataset is used  
 TRAIN_SUBSET_SIZE = 10000   
 EVAL_SUBSET_SIZE = 1000
 
+
+# note if augment is true is number of training samples = TRAIN_SUBSET_SIZE * NUM_AUGMENT * 0.65 (65 Percent of dataset is smiles strings)
 BASE_MODEL = "Codemaster67/Olmo-7b-spe" 
 
 SMILES_START = "<|start_of_smiles|>"
@@ -58,11 +59,7 @@ def print_main(message):
         print(message)
 
 
-# ─────────────────────────────────────────────────────────
-# 1. Custom Manual Logging Function
-# ─────────────────────────────────────────────────────────
-def manual_wandb_log(metrics_dict, step):
-    """Manually sends a dictionary of metrics to WandB on the main process."""
+def wandb_log(metrics_dict, step):
     if int(os.getenv("LOCAL_RANK", "0")) == 0:
         wandb.log(metrics_dict, step=step)
 
@@ -262,14 +259,13 @@ class CLMTrainerWithPerplexity(Trainer):
             metrics_to_log["eval/perplexity"] = logs["eval_perplexity"]
 
         if metrics_to_log:
-            manual_wandb_log(metrics_to_log, step=self.state.global_step)
+            wandb_log(metrics_to_log, step=self.state.global_step)
 
 
 def main():
     set_seed(SEED)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
 
-    # Initialize wandb manually on the main process
     if is_main_process:
         wandb.init(project="Olmo_run", name="olmo_lora_r64_alpha128")
 
