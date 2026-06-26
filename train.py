@@ -288,9 +288,9 @@ def main():
         processing_class=tokenizer,
     )
 
-    print_main("Running baseline evaluation before training...")
-    baseline_metrics = trainer.evaluate()
-    print_main(f"Baseline metrics: {baseline_metrics}")
+    # print_main("Running baseline evaluation before training...")
+    # baseline_metrics = trainer.evaluate()
+    # print_main(f"Baseline metrics: {baseline_metrics}")
 
     train_result = trainer.train()
 
