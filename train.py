@@ -18,8 +18,9 @@ from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 import rdkit
 import wandb
 
-os.environ["WANDB_PROJECT"] = "Olmo_run"
-os.environ["WANDB_LOG_MODEL"] = "false" # no saving model since 
+# We don't need this env variable anymore since we are initializing wandb manually
+# os.environ["WANDB_PROJECT"] = "Olmo_run" 
+os.environ["WANDB_LOG_MODEL"] = "false" 
 
 DATASET_NAME = "Codemaster67/Causal_lm_chemistry_1M_rows"         
 OUTPUT_DIR = "./olmo_chem_lora_cpt_LoRA_r64_alpha128"
@@ -36,17 +37,15 @@ WEIGHT_DECAY = 0.01
 LOGGING_STEPS = 10
 EVAL_STEPS = 50                             
 SAVE_STEPS = 100
-
 AUGMENT = True
-NUM_AUGMENT = 4  # NUMBER OF NEW SMILES STRING TO BE CREATED 
+NUM_AUGMENT = 4  
 
-USE_SUBSET = True  # If false then the whole dataset is used
+USE_SUBSET = True  
+
 TRAIN_SUBSET_SIZE = 10000   
 EVAL_SUBSET_SIZE = 1000
 
-#If augment is true then final number of training examples = TRAIN_SUBSET_SIZE * NUM_AUGMENT * 0.65(it only aguments the smiles strings which constitutes 65 percent of the dataset)
-
-BASE_MODEL = "Codemaster67/Olmo-7b-spe" #this model has the new tokneizer
+BASE_MODEL = "Codemaster67/Olmo-7b-spe" 
 
 SMILES_START = "<|start_of_smiles|>"
 SMILES_END = "<|end_of_smiles|>"
@@ -54,12 +53,21 @@ EOS = "<|endoftext|>"
 
 
 def print_main(message):
-    "prints only for rank 0"
+    """prints only for rank 0"""
     if int(os.getenv("LOCAL_RANK", "0")) == 0:
         print(message)
 
 
-def setup_tokenizer(tokenizer_id="Codemaster67/Olmo-7b-spe"):
+# ─────────────────────────────────────────────────────────
+# 1. Custom Manual Logging Function
+# ─────────────────────────────────────────────────────────
+def manual_wandb_log(metrics_dict, step):
+    """Manually sends a dictionary of metrics to WandB on the main process."""
+    if int(os.getenv("LOCAL_RANK", "0")) == 0:
+        wandb.log(metrics_dict, step=step)
+
+
+def setup_tokenizer(tokenizer_id="Codemaster67/Olmo-7b-spe") -> AutoTokenizer:
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_id,
         trust_remote_code=True,
@@ -126,7 +134,7 @@ def setup_model(model_id=BASE_MODEL, lora=True):
     return model
 
 
-def tokenize_function(examples: dict, tokenizer):
+def tokenize_function(examples: dict, tokenizer: AutoTokenizer) -> dict:
     texts = [t for t in examples["text"]] 
     return tokenizer(
         texts,
@@ -169,14 +177,12 @@ def prepare_datasets(tokenizer, augment=AUGMENT):
     train_dataset = split_dataset["train"]
     val_dataset = split_dataset["test"]
 
-
     if USE_SUBSET:
         print_main(f"Using a subset of the training data: {TRAIN_SUBSET_SIZE} examples")
         train_dataset = train_dataset.select(range(TRAIN_SUBSET_SIZE))
         
         print_main(f"Using a subset of the validation data: {EVAL_SUBSET_SIZE} examples")
         val_dataset = val_dataset.select(range(EVAL_SUBSET_SIZE))
-
 
     Source_name = "unichem"  
     if augment:
@@ -220,12 +226,8 @@ def prepare_datasets(tokenizer, augment=AUGMENT):
 
     return train_packed, val_packed
 
-
-# ─────────────────────────────────────────────────────────
-# Custom Trainer with Perplexity Logging
-# ─────────────────────────────────────────────────────────
 class CLMTrainerWithPerplexity(Trainer):
-    """Extends HuggingFace Trainer to log perplexity during evaluation."""
+    """Extends HuggingFace Trainer to calculate perplexity and explicitly log metrics manually."""
 
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
         metrics = super().evaluate(
@@ -241,20 +243,35 @@ class CLMTrainerWithPerplexity(Trainer):
             except OverflowError:
                 perplexity = float("inf")
             metrics[f"{metric_key_prefix}_perplexity"] = perplexity
-
-            if self.is_world_process_zero():
-                wandb.log({
-                    "eval/perplexity": perplexity,
-                    "train/global_step": self.state.global_step
-                })
-
+            
         return metrics
 
+    def log(self, logs: dict):
+        super().log(logs)
+        
+        metrics_to_log = {}
+        
+        if "loss" in logs:
+            metrics_to_log["train/loss"] = logs["loss"]
+        if "learning_rate" in logs:
+            metrics_to_log["train/learning_rate"] = logs["learning_rate"]
+            
+        if "eval_loss" in logs:
+            metrics_to_log["eval/loss"] = logs["eval_loss"]
+        if "eval_perplexity" in logs:
+            metrics_to_log["eval/perplexity"] = logs["eval_perplexity"]
+
+        if metrics_to_log:
+            manual_wandb_log(metrics_to_log, step=self.state.global_step)
 
 
 def main():
     set_seed(SEED)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
+
+    # Initialize wandb manually on the main process
+    if is_main_process:
+        wandb.init(project="Olmo_run", name="olmo_lora_r64_alpha128")
 
     tokenizer = setup_tokenizer()
     model = setup_model()
@@ -287,8 +304,7 @@ def main():
         greater_is_better=False,
         logging_steps=LOGGING_STEPS,
         logging_first_step=True,
-        run_name="olmo_lora_r64_alpha128",
-        report_to="wandb",
+        report_to="none",  
         gradient_checkpointing=True,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
@@ -306,10 +322,6 @@ def main():
         processing_class=tokenizer,
     )
 
-    # print_main("Running baseline evaluation before training...")
-    # baseline_metrics = trainer.evaluate()
-    # print_main(f"Baseline metrics: {baseline_metrics}")
-
     train_result = trainer.train()
 
     ADAPTER_DIR = os.path.join(OUTPUT_DIR, "adapter")
@@ -317,20 +329,16 @@ def main():
     print_main("Running final evaluation...")
     final_metrics = trainer.evaluate()
 
-
     if is_main_process:
         tokenizer.save_pretrained(ADAPTER_DIR)
         
         print_main("Attempting to push adaptors to HF Hub...")
         try:
-            trainer.model.push_to_hub(
-                HF_REPO_ID
-            )
+            trainer.model.push_to_hub(HF_REPO_ID)
             tokenizer.push_to_hub(HF_REPO_ID)
             print_main(f"Successfully pushed merged model to {HF_REPO_ID}")
         except Exception as e:
             print_main(f"Failed to push merged model: {e}")
-
 
         final_ppl = final_metrics.get("eval_perplexity", "N/A")
         final_loss = final_metrics.get("eval_loss", "N/A")
@@ -341,6 +349,8 @@ def main():
         print(f"  Train loss:          {train_result.training_loss:.4f}")
         print(f"  Output saved to:     {OUTPUT_DIR}")
         print("=" * 70 + "\n")
+        
+        wandb.finish()
 
 
 if __name__ == "__main__":
