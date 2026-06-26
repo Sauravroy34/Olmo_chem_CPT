@@ -36,9 +36,17 @@ WEIGHT_DECAY = 0.01
 LOGGING_STEPS = 10
 EVAL_STEPS = 50                             
 SAVE_STEPS = 100
-NUM_AUGMENT = 4 # NUMBER OF NEW SMILES STRING TO BE CREATED 
 
-BASE_MODEL = "Codemaster67/Olmo-7b-spe"
+AUGMENT = True
+NUM_AUGMENT = 4  # NUMBER OF NEW SMILES STRING TO BE CREATED 
+
+USE_SUBSET = True  # If false then the whole dataset is used
+TRAIN_SUBSET_SIZE = 10000   
+EVAL_SUBSET_SIZE = 1000
+
+#If augment is true then final number of training examples = TRAIN_SUBSET_SIZE * NUM_AUGMENT * 0.65(it only aguments the smiles strings which constitutes 65 percent of the dataset)
+
+BASE_MODEL = "Codemaster67/Olmo-7b-spe" #this model has the new tokneizer
 
 SMILES_START = "<|start_of_smiles|>"
 SMILES_END = "<|end_of_smiles|>"
@@ -51,7 +59,7 @@ def print_main(message):
         print(message)
 
 
-def setup_tokenizer(tokenizer_id="Codemaster67/Olmo-7b-spe") -> AutoTokenizer:
+def setup_tokenizer(tokenizer_id="Codemaster67/Olmo-7b-spe"):
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_id,
         trust_remote_code=True,
@@ -118,7 +126,7 @@ def setup_model(model_id=BASE_MODEL, lora=True):
     return model
 
 
-def tokenize_function(examples: dict, tokenizer: AutoTokenizer) -> dict:
+def tokenize_function(examples: dict, tokenizer):
     texts = [t for t in examples["text"]] 
     return tokenizer(
         texts,
@@ -153,7 +161,7 @@ def pack_sequences(tokenized_dataset, tokenizer, max_seq_length: int):
     return packed
 
 
-def prepare_datasets(tokenizer, augment=True):
+def prepare_datasets(tokenizer, augment=AUGMENT):
     full_dataset = load_dataset(DATASET_NAME, split="train+test") 
     shuffled_dataset = full_dataset.shuffle(seed=SEED)
 
@@ -161,18 +169,28 @@ def prepare_datasets(tokenizer, augment=True):
     train_dataset = split_dataset["train"]
     val_dataset = split_dataset["test"]
 
+
+    if USE_SUBSET:
+        print_main(f"Using a subset of the training data: {TRAIN_SUBSET_SIZE} examples")
+        train_dataset = train_dataset.select(range(TRAIN_SUBSET_SIZE))
+        
+        print_main(f"Using a subset of the validation data: {EVAL_SUBSET_SIZE} examples")
+        val_dataset = val_dataset.select(range(EVAL_SUBSET_SIZE))
+
+
     Source_name = "unichem"  
+    if augment:
+        def format_smiles(example):
+            input_smiles = example["text"] if example["source"] == Source_name else ""
+            if input_smiles != "":
+                augmented_list = augment_smiles(input_smiles)
+                formatted_smiles = [f"{SMILES_START}{smiles}{SMILES_END}{EOS}" for smiles in augmented_list]
+                formatted_smiles.append(input_smiles)  
+                example["text"] = "".join(formatted_smiles) 
+            return example
 
-    def format_smiles(example):
-        input_smiles = example["text"] if example["source"] == Source_name else ""
-        if input_smiles != "" and augment:
-            augmented_list = augment_smiles(input_smiles)
-            formatted_smiles = [f"{SMILES_START}{smiles}{SMILES_END}{EOS}" for smiles in augmented_list]
-            formatted_smiles.append(input_smiles)  
-            example["text"] = "".join(formatted_smiles) 
-        return example
-
-    train_dataset = train_dataset.map(format_smiles, num_proc=4, desc="Formatting smiles")
+        train_dataset = train_dataset.map(format_smiles, num_proc=4, desc="Formatting smiles")
+        
     random.seed(SEED)
 
     tokenize_fn = partial(tokenize_function, tokenizer=tokenizer)
@@ -226,8 +244,8 @@ class CLMTrainerWithPerplexity(Trainer):
 
             if self.is_world_process_zero():
                 wandb.log({
-                    "eval_perplexity": perplexity,
-                    "train_global_step": self.state.global_step
+                    "eval/perplexity": perplexity,
+                    "train/global_step": self.state.global_step
                 })
 
         return metrics
@@ -295,56 +313,29 @@ def main():
     train_result = trainer.train()
 
     ADAPTER_DIR = os.path.join(OUTPUT_DIR, "adapter")
-    print_main(f"Saving LoRA adapter to {ADAPTER_DIR}")
-    trainer.save_model(ADAPTER_DIR)
     
     print_main("Running final evaluation...")
     final_metrics = trainer.evaluate()
 
-    # ==========================================================
-    # Merge LoRA and Save 
-    # ==========================================================
+
     if is_main_process:
         tokenizer.save_pretrained(ADAPTER_DIR)
         
-        print_main("Reloading base model for merge...")
-        base_model = AutoModelForCausalLM.from_pretrained(
-            BASE_MODEL,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-        )
-
-        print_main("Loading adapter and merging weights...")
-        merged_model = PeftModel.from_pretrained(
-            base_model,
-            ADAPTER_DIR,
-        )
-        merged_model = merged_model.merge_and_unload()
-
-        MERGED_DIR = os.path.join(OUTPUT_DIR, "merged")
-        print_main(f"Saving merged model to {MERGED_DIR}")
-        merged_model.save_pretrained(MERGED_DIR)
-        tokenizer.save_pretrained(MERGED_DIR)
-
-        print_main("Attempting to push merged model to HF Hub...")
+        print_main("Attempting to push adaptors to HF Hub...")
         try:
-            merged_model.push_to_hub(
+            trainer.model.push_to_hub(
                 HF_REPO_ID
             )
             tokenizer.push_to_hub(HF_REPO_ID)
             print_main(f"Successfully pushed merged model to {HF_REPO_ID}")
         except Exception as e:
             print_main(f"Failed to push merged model: {e}")
-            print_main(f"Merged model saved locally at {MERGED_DIR}")
 
-        baseline_ppl = baseline_metrics.get("eval_perplexity", "N/A")
+
         final_ppl = final_metrics.get("eval_perplexity", "N/A")
-        baseline_loss = baseline_metrics.get("eval_loss", "N/A")
         final_loss = final_metrics.get("eval_loss", "N/A")
 
         print("\n" + "=" * 70)
-        print(f"  Baseline eval loss:  {baseline_loss}")
-        print(f"  Baseline perplexity: {baseline_ppl}")
         print(f"  Final eval loss:     {final_loss}")
         print(f"  Final perplexity:    {final_ppl}")
         print(f"  Train loss:          {train_result.training_loss:.4f}")
