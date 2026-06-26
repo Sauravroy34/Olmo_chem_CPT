@@ -18,8 +18,9 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 import rdkit
 
+import wandb
 
-
+wandb.init(project = "Olmo_run")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -118,11 +119,10 @@ def setup_model(model_id=BASE_MODEL,lora=True):
         if hasattr(model.base_model.model, 'lm_head'):
             model.base_model.model.lm_head.weight.requires_grad = True
 
-        # Print out confirmations to logs
         for name, param in model.named_parameters():
             if "embed_tokens" in name or "lm_head" in name:
                 param.requires_grad = True
-                logger.info(f" -> Enforced trainable: {name} ({param.dtype})")
+                print(f"Lm_head and embed_tokens unfrozen")
 
     model.print_trainable_parameters()
     return model
@@ -155,7 +155,6 @@ def pack_sequences(tokenized_dataset, tokenizer, max_seq_length: int):
     """
 
     def group_texts(examples):
-        # Concatenate all tokenized texts
         concatenated = {k: list(chain(*examples[k])) for k in examples.keys()}
         total_length = len(concatenated["input_ids"])
 
@@ -169,7 +168,6 @@ def pack_sequences(tokenized_dataset, tokenizer, max_seq_length: int):
             for k, t in concatenated.items()
         }
 
-        # For CLM, labels are the same as input_ids (shifted internally by the model)
         result["labels"] = result["input_ids"].copy()
         return result
 
@@ -185,7 +183,7 @@ def pack_sequences(tokenized_dataset, tokenizer, max_seq_length: int):
     return packed
 
 
-def prepare_datasets(tokenizer: AutoTokenizer):
+def prepare_datasets(tokenizer,augment = True):
 
 
     full_dataset = load_dataset(DATASET_NAME,split ="train+test") 
@@ -197,14 +195,14 @@ def prepare_datasets(tokenizer: AutoTokenizer):
     train_dataset = split_dataset["train"]
     val_dataset = split_dataset["test"]
 
-    Source_name = "unichem" #dataset contains 2 cols , text and source 
+    Source_name = "unichem"  
 
     def format_smiles(example):
         input_smiles = example["text"] if example["source"] == Source_name else ""
-        if input_smiles != "":
+        if input_smiles != "" and augment:
             augmented_list = augment_smiles(input_smiles)
             formatted_smiles = [f"{SMILES_START}{smiles}{SMILES_END}{EOS}" for smiles in augmented_list]
-            formatted_smiles.append(input_smiles) #add original 
+            formatted_smiles.append(input_smiles)  
             example["text"] = "".join(formatted_smiles) 
         return example
 
@@ -212,7 +210,6 @@ def prepare_datasets(tokenizer: AutoTokenizer):
     random.seed(SEED)
 
 
-    logger.info("Tokenizing...")
     tokenize_fn = partial(tokenize_function, tokenizer=tokenizer)
 
     dataset = DatasetDict({
@@ -229,17 +226,15 @@ def prepare_datasets(tokenizer: AutoTokenizer):
         desc="Tokenizing",
     )
 
-    # Pack sequences for efficient training
-    logger.info(f"Packing sequences to length {MAX_SEQ_LENGTH}...")
     train_packed = pack_sequences(tokenized["train"], tokenizer, MAX_SEQ_LENGTH)
     val_packed = pack_sequences(tokenized["test"], tokenizer, MAX_SEQ_LENGTH)
 
-    logger.info(f"Packed training sequences:   {len(train_packed)}")
-    logger.info(f"Packed validation sequences: {len(val_packed)}")
+    print(f"Packed training sequences:   {len(train_packed)}")
+    print(f"Packed validation sequences: {len(val_packed)}")
 
-    # Log a sample to verify formatting
+
     sample_ids = train_packed[0]["input_ids"][:200]
-    logger.info(f"Sample packed text (first 200 tokens):\n{tokenizer.decode(sample_ids)}")
+    print(f"Sample packed text (first 200 tokens):\n{tokenizer.decode(sample_ids)}")
 
     return train_packed, val_packed
 
@@ -265,7 +260,11 @@ class CLMTrainerWithPerplexity(Trainer):
             except OverflowError:
                 perplexity = float("inf")
             metrics[f"{metric_key_prefix}_perplexity"] = perplexity
-            logger.info(f"Perplexity: {perplexity:.2f}")
+
+            wandb.log({
+                "eval_perplexity": perplexity,
+                "eval_step": self.state.global_step
+            })
 
         return metrics
 
@@ -322,7 +321,7 @@ def main():
         # Logging
         logging_steps=LOGGING_STEPS,
         logging_first_step=True,
-        report_to="none",  
+        report_to="wandb",
 
         # Memory optimization
         gradient_checkpointing=True,
@@ -347,20 +346,16 @@ def main():
         processing_class=tokenizer,
     )
 
-    # ── Run initial evaluation (baseline) ──
-    logger.info("Running baseline evaluation before training...")
+    print("Running baseline evaluation before training...")
     baseline_metrics = trainer.evaluate()
-    logger.info(f"Baseline metrics: {baseline_metrics}")
+    print(f"Baseline metrics: {baseline_metrics}")
 
-    # ── Train ──
     train_result = trainer.train()
-
-    # ── Save final model locally ──
 
 
     ADAPTER_DIR = os.path.join(OUTPUT_DIR, "adapter")
 
-    logger.info(f"Saving LoRA adapter to {ADAPTER_DIR}")
+    print(f"Saving LoRA adapter to {ADAPTER_DIR}")
 
     trainer.save_model(ADAPTER_DIR)
     tokenizer.save_pretrained(ADAPTER_DIR)
@@ -369,7 +364,7 @@ def main():
     # Merge LoRA into base model
     # ==========================================================
 
-    logger.info("Reloading base model for merge...")
+    print("Reloading base model for merge...")
 
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
@@ -377,7 +372,7 @@ def main():
         trust_remote_code=True,
     )
 
-    logger.info("Loading adapter and merging weights...")
+    print("Loading adapter and merging weights...")
 
     merged_model = PeftModel.from_pretrained(
         base_model,
@@ -392,7 +387,6 @@ def main():
 
     MERGED_DIR = os.path.join(OUTPUT_DIR, "merged")
 
-    logger.info(f"Saving merged model to {MERGED_DIR}")
 
     merged_model.save_pretrained(
         MERGED_DIR,
@@ -404,7 +398,6 @@ def main():
     # Push merged model to HF Hub
     # ==========================================================
 
-    logger.info(f"Pushing merged model to {HF_REPO_ID}")
 
     try:
 
@@ -419,19 +412,12 @@ def main():
 
         tokenizer.push_to_hub(HF_REPO_ID)
 
-        logger.info(
-            f"Successfully pushed merged model to {HF_REPO_ID}"
-        )
-
     except Exception as e:
-        logger.error(f"Failed to push merged model: {e}")
 
-        logger.info(
+        print(
             f"Merged model saved locally at {MERGED_DIR}"
         )
 
-    # ── Final evaluation ──
-    logger.info("Running final evaluation...")
     final_metrics = trainer.evaluate()
 
 
