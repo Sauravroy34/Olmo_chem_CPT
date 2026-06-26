@@ -36,6 +36,7 @@ WEIGHT_DECAY = 0.01
 LOGGING_STEPS = 10
 EVAL_STEPS = 50                             
 SAVE_STEPS = 100
+NUM_AUGMENT = 4 # NUMBER OF NEW SMILES STRING TO BE CREATED 
 
 BASE_MODEL = "Codemaster67/Olmo-7b-spe"
 
@@ -58,7 +59,7 @@ def setup_tokenizer(tokenizer_id="Codemaster67/Olmo-7b-spe") -> AutoTokenizer:
     return tokenizer
 
 
-def augment_smiles(smiles, num_augmentations=4):
+def augment_smiles(smiles, num_augmentations=NUM_AUGMENT):
     smiles = smiles.replace("<|start_of_smiles|>", "").replace("<|end_of_smiles|>", "")
     mol = rdkit.Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -225,16 +226,14 @@ class CLMTrainerWithPerplexity(Trainer):
 
             if self.is_world_process_zero():
                 wandb.log({
-                    "eval/perplexity": perplexity,
-                    "train/global_step": self.state.global_step
+                    "eval_perplexity": perplexity,
+                    "train_global_step": self.state.global_step
                 })
 
         return metrics
 
 
-# ─────────────────────────────────────────────────────────
-# Main Training Loop
-# ─────────────────────────────────────────────────────────
+
 def main():
     set_seed(SEED)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
