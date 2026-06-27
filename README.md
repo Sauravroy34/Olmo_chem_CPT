@@ -73,8 +73,8 @@ Olmo_chem_CPT/
 └────────┬────────────┘     └───────────────┬──────────────────┘     └──────┬───────┘
          │                                  │                              │
          │  Codemaster67/                   │  Codemaster67/               │ Codemaster67/
-         │  Causal_lm_chemistry_1M_rows     │  Olmo_spe_tokenizer_...      │ Olmo-7b-spe
-         ▼                                  ▼                              ▼
+         │  Causal_lm_chemistry_1M_rows     │  Olmo_spe_tokenizer_...      │ Olmo-7b-spe (already in hugging face)
+         ▼   (already in hugging face)      ▼  (already in hugging face)   ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                         Training Scripts (pick one)                             │
 │                                                                                │
@@ -83,7 +83,7 @@ Olmo_chem_CPT/
 │   PreTrainQlora.py ─── QLoRA 4-bit NF4 + LoRA r=64 α=128                      │
 │                                                                                │
 │                     ↓ push to HuggingFace Hub ↓                                │
-│                                              │
+│                                              
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
