@@ -34,17 +34,18 @@ The base model after steps 1–2 is published as [`Codemaster67/Olmo-7b-spe`](ht
 ```
 Olmo_chem_CPT/
 │
-├── DataPrep.py                         # Dataset preparation — combines 4 sources, pushes to HF Hub
+├── intial_pre/
+│   ├── DataPrep.py                     # Dataset preparation — combines 4 sources, pushes to HF Hub
+│   └── Model_init.py                   # Resizes model embeddings for the new tokenizer (mean init)
 │
 ├── SPE_Tokenizer_generation/
 │   ├── OLMO_NLP_tokenizer_extended.py  # Trains SPE tokenizer on ZINC20+ChEMBL, extends OLMo tokenizer
 │   └── Spec_300.txt                    # The 300 learned SPE chemistry tokens
 │
-├── Model_init.py                       # Resizes model embeddings for the new tokenizer (mean init)
-│
-├── FullFinetune.py                     # Full-parameter fine-tuning with FSDP
-├── PreTrainLora.py                     # LoRA adapter training (r=64, alpha=128)
-├── PreTrainQlora.py                    # QLoRA adapter training (4-bit NF4 + LoRA)
+├── training_scripts/
+│   ├── FullFinetune.py                 # Full-parameter fine-tuning with FSDP
+│   ├── PreTrainLora.py                 # LoRA adapter training (r=64, alpha=128)
+│   └── PreTrainQlora.py               # QLoRA adapter training (4-bit NF4 + LoRA)
 │
 └── README.md                           # This file
 ```
