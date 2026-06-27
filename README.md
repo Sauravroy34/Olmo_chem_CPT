@@ -11,7 +11,6 @@ Continual pre-training of [OLMo-7B](https://huggingface.co/allenai/OLMo-7B-hf) o
 - [Pipeline Overview](#pipeline-overview)
 - [Prerequisites](#prerequisites)
 - [How to Run](#how-to-run)
-  - [Run Training](#step-4--run-training)
 - [How Training Sample Size Is Calculated](#how-training-sample-size-is-calculated)
 - [Configuration Reference](#configuration-reference)
 - [Weights & Biases Logging](#weights--biases-logging)
