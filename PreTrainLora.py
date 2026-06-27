@@ -1,9 +1,14 @@
+"""
+    Multi GPU:   torchrun --nproc_per_node=<NUM_GPUS> FullFinetune.py
+"""
 import os
 import math
 import random
 import torch
 from functools import partial
 from itertools import chain
+import time
+from datetime import datetime
 
 from datasets import load_dataset, DatasetDict
 from transformers import (
@@ -15,11 +20,16 @@ from transformers import (
     set_seed,
 )
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
-import rdkit
+from huggingface_hub import ModelCard, ModelCardData
+from rdkit import Chem
 import wandb
 
 
-os.environ["WANDB_LOG_MODEL"] = "false" 
+os.environ["WANDB_LOG_MODEL"] = "false"
+
+# LoRA config constants
+LORA_R = 64
+LORA_ALPHA = 128
 
 DATASET_NAME = "Codemaster67/Causal_lm_chemistry_1M_rows"         
 OUTPUT_DIR = "./olmo_chem_lora_cpt_LoRA_r64_alpha128"
@@ -37,7 +47,7 @@ LOGGING_STEPS = 10
 EVAL_STEPS = 50                             
 SAVE_STEPS = 100
 
-AUGMENT = True
+AUGMENT = False
 NUM_AUGMENT = 4  
 
 USE_SUBSET = True # if set to false then whole training dataset is used  
@@ -46,7 +56,7 @@ EVAL_SUBSET_SIZE = 1000
 
 
 # note if augment is true is number of training samples = TRAIN_SUBSET_SIZE * NUM_AUGMENT * 0.65 (65 Percent of dataset is smiles strings)
-BASE_MODEL = "Codemaster67/Olmo-7b-spe" 
+BASE_MODEL = "Codemaster67/Olmo-7b-spe" # THIS MODEL HAS THE NEW TOKENS ADDED
 
 SMILES_START = "<|start_of_smiles|>"
 SMILES_END = "<|end_of_smiles|>"
@@ -64,17 +74,20 @@ def wandb_log(metrics_dict, step):
         wandb.log(metrics_dict, step=step)
 
 
-def setup_tokenizer(tokenizer_id="Codemaster67/Olmo-7b-spe") -> AutoTokenizer:
+def setup_tokenizer(tokenizer_id= BASE_MODEL) -> AutoTokenizer:
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_id,
         trust_remote_code=True,
     )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token  
+
     return tokenizer
 
 
 def augment_smiles(smiles, num_augmentations=NUM_AUGMENT):
     smiles = smiles.replace("<|start_of_smiles|>", "").replace("<|end_of_smiles|>", "")
-    mol = rdkit.Chem.MolFromSmiles(smiles)
+    mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return [smiles]  
 
@@ -83,7 +96,7 @@ def augment_smiles(smiles, num_augmentations=NUM_AUGMENT):
     max_attempts = num_augmentations * 2  
 
     while len(augmented_set) < num_augmentations and attempts < max_attempts:
-        rand_smiles = rdkit.Chem.MolToSmiles(mol, doRandom=True)
+        rand_smiles = Chem.MolToSmiles(mol, doRandom=True)
         augmented_set.add(rand_smiles)
         attempts += 1
 
@@ -96,15 +109,17 @@ def setup_model(model_id=BASE_MODEL, lora=True):
     
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         trust_remote_code=True,
         attn_implementation="flash_attention_2",  
     )
     if lora:
         peft_config = LoraConfig(
-            r=64,
-            lora_alpha=128,
+            r=LORA_R,
+            lora_alpha=LORA_ALPHA,
             target_modules="all-linear", 
+            #added those to module_to_save since the model used over here has resized token and lm_head layer already
+            modules_to_save=["embed_tokens", "lm_head"] , # https://stackoverflow.com/questions/79633111/how-to-properly-save-and-load-a-peft-trained-unsloth-model-with-resized-token-em
             lora_dropout=0.01,
             bias="none",
             use_rslora=True, 
@@ -113,19 +128,7 @@ def setup_model(model_id=BASE_MODEL, lora=True):
         
         print_main("Applying LoRA adapter configuration...")
         model = get_peft_model(model, peft_config)
-        
-        if hasattr(model.base_model.model, 'model') and hasattr(model.base_model.model.model, 'embed_tokens'):
-            model.base_model.model.model.embed_tokens.weight.requires_grad = True
-        elif hasattr(model.base_model.model, 'embed_tokens'):
-            model.base_model.model.embed_tokens.weight.requires_grad = True
-            
-        if hasattr(model.base_model.model, 'lm_head'):
-            model.base_model.model.lm_head.weight.requires_grad = True
 
-        for name, param in model.named_parameters():
-            if "embed_tokens" in name or "lm_head" in name:
-                param.requires_grad = True
-                print_main(f"Lm_head and embed_tokens unfrozen")
 
     model.print_trainable_parameters()
     return model
@@ -152,7 +155,7 @@ def pack_sequences(tokenized_dataset, tokenizer, max_seq_length: int):
             k: [t[i : i + max_seq_length] for i in range(0, total_length, max_seq_length)]
             for k, t in concatenated.items()
         }
-        result["labels"] = result["input_ids"].copy()
+        # result["labels"] = result["input_ids"].copy() data_collator handles the label part
         return result
 
     packed = tokenized_dataset.map(
@@ -240,35 +243,29 @@ class CLMTrainerWithPerplexity(Trainer):
             except OverflowError:
                 perplexity = float("inf")
             metrics[f"{metric_key_prefix}_perplexity"] = perplexity
-            
+
+            # Explicitly log eval perplexity to wandb (rank 0 only)
+            if int(os.getenv("LOCAL_RANK", "0")) == 0 and wandb.run is not None:
+                wandb.log({
+                    f"{metric_key_prefix}_perplexity": perplexity,
+                    f"{metric_key_prefix}_loss": metrics[eval_loss_key],
+                }, step=self.state.global_step)
+
         return metrics
 
-    def log(self, logs: dict):
-        super().log(logs)
-        
-        metrics_to_log = {}
-        
-        if "loss" in logs:
-            metrics_to_log["train/loss"] = logs["loss"]
-        if "learning_rate" in logs:
-            metrics_to_log["train/learning_rate"] = logs["learning_rate"]
-            
-        if "eval_loss" in logs:
-            metrics_to_log["eval/loss"] = logs["eval_loss"]
-        if "eval_perplexity" in logs:
-            metrics_to_log["eval/perplexity"] = logs["eval_perplexity"]
-
-        if metrics_to_log:
-            wandb_log(metrics_to_log, step=self.state.global_step)
 
 
 def main():
     set_seed(SEED)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
 
-    if is_main_process:
-        wandb.init(project="Olmo_run", name="olmo_lora_r64_alpha128")
+    # Contextual wandb project name: method + rank + alpha + timestamp
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    wandb_project = f"OLMo_LoRA_r{LORA_R}_a{LORA_ALPHA}_{run_timestamp}"
+    wandb_run_name = f"lora_r{LORA_R}_a{LORA_ALPHA}_lr{LEARNING_RATE}_{run_timestamp}"
 
+    if is_main_process:
+        wandb.init(project=wandb_project, name=wandb_run_name)
     tokenizer = setup_tokenizer()
     model = setup_model()
 
@@ -291,7 +288,6 @@ def main():
         lr_scheduler_type="cosine",
         optim="adamw_8bit", 
         bf16=True,
-        tf32=True,
         eval_strategy="steps",
         eval_steps=EVAL_STEPS,
         save_strategy="no",
@@ -300,7 +296,8 @@ def main():
         greater_is_better=False,
         logging_steps=LOGGING_STEPS,
         logging_first_step=True,
-        report_to="none",  
+        report_to="wandb", 
+        run_name=wandb_run_name,
         gradient_checkpointing=True,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
@@ -327,17 +324,117 @@ def main():
 
     if is_main_process:
         tokenizer.save_pretrained(ADAPTER_DIR)
-        
+
+        final_ppl = final_metrics.get("eval_perplexity", "N/A")
+        final_loss = final_metrics.get("eval_loss", "N/A")
+
+        # ── Model Card ──────────────────────────────────────────────
+        card_data = ModelCardData(
+            language="en",
+            license="apache-2.0",
+            library_name="peft",
+            tags=["chemistry", "smiles", "olmo", "causal-lm", "lora", "peft"],
+            datasets=[DATASET_NAME],
+            base_model=BASE_MODEL,
+        )
+        card_content = f"""---
+{card_data.to_yaml()}
+---
+
+# OLMo-7B LoRA Adapter — Chemistry SMILES CPT
+
+## Model Description
+
+This is a **LoRA (Low-Rank Adaptation)** adapter trained on top of
+[{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) for chemistry
+SMILES language modelling using the
+[{DATASET_NAME}](https://huggingface.co/datasets/{DATASET_NAME}) dataset.
+
+The base model's tokenizer was pre-extended with ~300 SPE (SMILES Pair
+Encoding) chemistry tokens plus `<|start_of_smiles|>` / `<|end_of_smiles|>`
+special tokens. The `embed_tokens` and `lm_head` layers are saved as
+full (non-LoRA) trainable copies via `modules_to_save` because they were
+resized during tokenizer extension.
+
+## LoRA Configuration
+
+| Parameter | Value |
+|---|---|
+| **Rank (r)** | {LORA_R} |
+| **Alpha** | {LORA_ALPHA} |
+| **Effective Scaling** | {LORA_ALPHA / LORA_R} |
+| **Target Modules** | all-linear |
+| **Dropout** | 0.01 |
+| **RSLoRA** | True (rank-stabilized) |
+| **Modules to Save** | embed_tokens, lm_head |
+
+## Training Details
+
+| Parameter | Value |
+|---|---|
+| **Method** | LoRA |
+| **Epochs** | {NUM_EPOCHS} |
+| **Learning Rate** | {LEARNING_RATE} |
+| **Optimizer** | AdamW 8-bit |
+| **Batch Size (per device)** | {BATCH_SIZE} |
+| **Gradient Accumulation** | {GRADIENT_ACCUMULATION_STEPS} |
+| **Max Sequence Length** | {MAX_SEQ_LENGTH} |
+| **Warmup Ratio** | {WARMUP_RATIO} |
+| **Weight Decay** | {WEIGHT_DECAY} |
+| **Scheduler** | Cosine |
+| **Precision** | bf16 |
+| **Gradient Checkpointing** | True |
+| **Augmentation** | {"ON (×" + str(NUM_AUGMENT) + " per unichem SMILES)" if AUGMENT else "OFF"} |
+| **Training Samples** | {TRAIN_SUBSET_SIZE if USE_SUBSET else "Full dataset"} |
+| **Eval Samples** | {EVAL_SUBSET_SIZE if USE_SUBSET else "Full dataset (10%)"} |
+
+## Evaluation Results
+
+| Metric | Value |
+|---|---|
+| **Final Eval Loss** | {final_loss} |
+| **Final Eval Perplexity** | {final_ppl} |
+| **Training Loss** | {train_result.training_loss:.4f} |
+
+## Usage
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+base_model = AutoModelForCausalLM.from_pretrained("{BASE_MODEL}", trust_remote_code=True)
+model = PeftModel.from_pretrained(base_model, "{HF_REPO_ID}")
+tokenizer = AutoTokenizer.from_pretrained("{HF_REPO_ID}", trust_remote_code=True)
+
+smiles_input = "<|start_of_smiles|>CC(=O)Oc1ccccc1C(=O)O<|end_of_smiles|>"
+inputs = tokenizer(smiles_input, return_tensors="pt")
+outputs = model.generate(**inputs, max_new_tokens=128)
+print(tokenizer.decode(outputs[0], skip_special_tokens=False))
+```
+
+## Intended Use
+
+Chemistry-domain language modelling, SMILES generation and completion,
+and downstream molecular property prediction via fine-tuning.
+
+## Limitations
+
+- LoRA adapters only; requires the base model [{BASE_MODEL}](https://huggingface.co/{BASE_MODEL}) to use.
+- Trained primarily on SMILES strings; natural-language instruction-following
+  ability may degrade compared to the base OLMo checkpoint.
+- Augmentation was {"enabled" if AUGMENT else "disabled"} for this run.
+"""
+        model_card = ModelCard(card_content)
+        # ────────────────────────────────────────────────────────────
+
         print_main("Attempting to push adaptors to HF Hub...")
         try:
             trainer.model.push_to_hub(HF_REPO_ID)
             tokenizer.push_to_hub(HF_REPO_ID)
-            print_main(f"Successfully pushed merged model to {HF_REPO_ID}")
+            model_card.push_to_hub(HF_REPO_ID, commit_message="Add model card")
+            print_main(f"Successfully pushed adapter + card to {HF_REPO_ID}")
         except Exception as e:
             print_main(f"Failed to push merged model: {e}")
-
-        final_ppl = final_metrics.get("eval_perplexity", "N/A")
-        final_loss = final_metrics.get("eval_loss", "N/A")
 
         print("\n" + "=" * 70)
         print(f"  Final eval loss:     {final_loss}")
