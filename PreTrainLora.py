@@ -24,7 +24,12 @@ from huggingface_hub import ModelCard, ModelCardData
 from rdkit import Chem
 import wandb
 
+from huggingface_hub import login
 
+
+login(token="hf token")
+
+wandb.login(key="wandb key")
 os.environ["WANDB_LOG_MODEL"] = "false"
 
 # LoRA config constants

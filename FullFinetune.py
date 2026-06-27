@@ -22,7 +22,12 @@ from huggingface_hub import ModelCard, ModelCardData
 from rdkit import Chem 
 import wandb
 
+from huggingface_hub import login
 
+
+login(token="hf token")
+
+wandb.login(key="wandb key")
 os.environ["WANDB_LOG_MODEL"] = "false" 
 
 DATASET_NAME = "Codemaster67/Causal_lm_chemistry_1M_rows"         
@@ -31,7 +36,7 @@ HF_REPO_ID = "Codemaster67/Olmo-7b_1M_Smiles_fullfinetune"
 SEED = 42
 
 NUM_EPOCHS = 1
-LEARNING_RATE = 5e-6 #full fine tuning lets have a conservative learning rate  
+LEARNING_RATE = 5e-6 #conservative learning rate  
 BATCH_SIZE = 32                             
 GRADIENT_ACCUMULATION_STEPS = 1             
 MAX_SEQ_LENGTH = 512                        
