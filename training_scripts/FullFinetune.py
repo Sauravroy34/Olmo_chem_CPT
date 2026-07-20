@@ -290,10 +290,9 @@ def main():
     set_seed(args.seed)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
 
-    # Contextual wandb project name: method + timestamp
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    wandb_project = f"OLMo_Full_Fine_tune_{run_timestamp}"
-    wandb_run_name = f"Full_Fine_tune_lr{args.learning_rate}_samples{args.train_subset_size}_{run_timestamp}"
+    wandb_project = f"Saurav_OLMo_Full_Fine_tune"
+    wandb_run_name = f"Full_Fine_tune_lr{args.learning_rate}_samples{args.train_subset_size}_run_{run_timestamp}"
 
     if is_main_process:
         wandb.init(project=wandb_project, name=wandb_run_name)

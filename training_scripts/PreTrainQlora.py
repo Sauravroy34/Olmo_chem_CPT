@@ -328,10 +328,9 @@ def main():
     set_seed(args.seed)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
 
-    # Contextual wandb project name: method + rank + alpha + timestamp
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    wandb_project = f"OLMo_QLoRA_r{args.lora_r}_a{args.lora_alpha}_{run_timestamp}"
-    wandb_run_name = f"qlora_r{args.lora_r}_a{args.lora_alpha}_lr{args.learning_rate}_{run_timestamp}"
+    wandb_project = f"Saurav_OLMo_PreTrain_QLora"
+    wandb_run_name = f"QLora_r{args.lora_r}_a{args.lora_alpha}_samples{args.train_subset_size}_run_{run_timestamp}"
 
     if is_main_process:
         wandb.init(project=wandb_project, name=wandb_run_name)
