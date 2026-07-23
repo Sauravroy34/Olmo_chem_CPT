@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
+    parser.add_argument("--cpu_offload", type=bool, default=False,
+                        help="Enable CPU offloading.")
+
+    parser.add_argument("--activation_checkpointing", type=bool, default=False,
+                        help="Enable activation checkpointing.")
+                        
     # ── Credentials & repo (user must supply these) ────────────────
     parser.add_argument("--hf_token", type=str, required=True,
                         help="HuggingFace API token for login and pushing to hub.")
@@ -341,8 +347,8 @@ def main():
         fsdp=True,
         fsdp_config={
             "transformer_layer_cls_to_wrap": transformer_layer_cls_name,
-            "activation_checkpointing": True,
-            "cpu_offload" : True
+            "activation_checkpointing": args.activation_checkpointing,
+            "cpu_offload" : args.cpu_offload
         }
     )
 
