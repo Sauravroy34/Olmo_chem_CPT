@@ -296,9 +296,8 @@ def main():
     set_seed(args.seed)
     is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
 
-    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    wandb_project = f"Saurav_OLMo_Full_Fine_tune"
-    wandb_run_name = f"Full_Fine_tune_lr{args.learning_rate}_samples{args.train_subset_size}_run_{run_timestamp}"
+    wandb_project = f"Saurav_OLMo_Full_Fine_tune_and_lora"
+    wandb_run_name = f"Full_Fine_tune_lr{args.learning_rate}_samples{args.train_subset_size}_batch_size{args.batch_size}"
 
     if is_main_process:
         wandb.init(project=wandb_project, name=wandb_run_name)
@@ -417,6 +416,7 @@ mean-initialised vectors for the new tokens.
 | **Max Sequence Length** | {args.max_seq_length} |
 | **Warmup Ratio** | {args.warmup_ratio} |
 | **Weight Decay** | {args.weight_decay} |
+| **Effective Batch Size (Batch Size {args.batch_size} x Gradient Accumulation {args.gradient_accumulation_steps})** | {args.batch_size * args.gradient_accumulation_steps} |
 | **Scheduler** | Cosine |
 | **Precision** | bf16 |
 | **Augmentation** | {"ON (×" + str(args.num_augment) + " per unichem SMILES)" if args.augment else "OFF"} |
