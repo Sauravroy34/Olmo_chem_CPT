@@ -104,9 +104,11 @@ def parse_args() -> argparse.Namespace:
                         help="Use the full dataset instead of a subset.")
     parser.add_argument("--train_subset_size", type=int, default=250000,
                         help="Training subset size (default: 250000). Ignored when --no_use_subset.")
-    # parser.add_argument("--eval_subset_size", type=int, default=25000,
-    #                     help="Eval subset size (default: 25000). Ignored when --no_use_subset.")
-
+    parser.add_argument("--eval_subset_size", type=int, default=25000,
+                        help="Eval subset size (default: 25000). Ignored when --no_use_subset.")
+    parser.add_argument("--save_strategy", action="store_true", default=True,
+                        help="Whether to have checkpoints or not")
+                        
     return parser.parse_args()
 
 
@@ -333,9 +335,9 @@ def main():
         bf16=True,
         eval_strategy="steps",
         eval_steps=args.eval_steps,
-        save_strategy="steps",
+        save_strategy="steps" if args.save_strategy else "no",
         save_total_limit=args.save_total_limit, #only save last N models 
-        save_steps=args.save_steps,
+        save_steps=args.save_steps ,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         logging_steps=args.logging_steps,
