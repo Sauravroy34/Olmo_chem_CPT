@@ -320,6 +320,7 @@ def main():
 
     transformer_layer_cls_name = type(model.model.layers[0]).__name__
 
+    # more about the args https://github.com/huggingface/transformers/blob/main/src/transformers/training_args.py#L180
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.num_epochs,
@@ -328,7 +329,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        warmup_ratio=args.warmup_ratio,
+        warmup_steps=args.warmup_ratio,
         lr_scheduler_type="cosine",
         optim="adamw_torch",  
         bf16=True,
