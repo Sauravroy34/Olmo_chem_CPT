@@ -213,8 +213,7 @@ def prepare_datasets(tokenizer, args: argparse.Namespace):
         train_dataset = train_dataset.select(range(args.train_subset_size))
         
         print_main(f"Using a subset of the validation data: {args.eval_subset_size} examples")
-        num_eval = int(0.10 * args.train_subset_size)
-        val_dataset = val_dataset.select(range(num_eval))
+        val_dataset = val_dataset.select(range(int(args.eval_subset_size)))
 
     Source_name = "unichem"  
     if args.augment:
