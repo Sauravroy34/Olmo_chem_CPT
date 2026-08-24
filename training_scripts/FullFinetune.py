@@ -86,10 +86,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Warmup ratio (default: 0.1).")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay (default: 0.01).")
     parser.add_argument("--logging_steps", type=int, default=10, help="Logging interval in steps (default: 10).")
-    parser.add_argument("--eval_steps", type=int, default=1000, help="Evaluation interval in steps (default: 1000).")
+    parser.add_argument("--eval_steps", type=int, default=200, help="Evaluation interval in steps (default: 1000).")
     parser.add_argument("--save_steps", type=int, default=1000, help="Save interval in steps (default: 1000).")
-    parser.add_argument("--save_total_limit", type=int, default=2,
-                        help="Maximum number of checkpoint saves to keep (default: 2).")
+    parser.add_argument("--save_total_limit", type=int, default=1,
+                        help="Maximum number of checkpoint saves to keep (default: 1).")
 
     # ── Augmentation ───────────────────────────────────────────────
     parser.add_argument("--augment", action="store_true", default=False,
@@ -104,8 +104,8 @@ def parse_args() -> argparse.Namespace:
                         help="Use the full dataset instead of a subset.")
     parser.add_argument("--train_subset_size", type=int, default=250000,
                         help="Training subset size (default: 250000). Ignored when --no_use_subset.")
-    parser.add_argument("--eval_subset_size", type=int, default=25000,
-                        help="Eval subset size (default: 25000). Ignored when --no_use_subset.")
+    # parser.add_argument("--eval_subset_size", type=int, default=25000,
+    #                     help="Eval subset size (default: 25000). Ignored when --no_use_subset.")
 
     return parser.parse_args()
 
@@ -211,7 +211,8 @@ def prepare_datasets(tokenizer, args: argparse.Namespace):
         train_dataset = train_dataset.select(range(args.train_subset_size))
         
         print_main(f"Using a subset of the validation data: {args.eval_subset_size} examples")
-        val_dataset = val_dataset.select(range(args.eval_subset_size))
+        num_eval = int(0.10 * args.train_subset_size)
+        val_dataset = val_dataset.select(range(num_eval))
 
     Source_name = "unichem"  
     if args.augment:
