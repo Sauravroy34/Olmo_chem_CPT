@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
                         help="Training subset size (default: 250000). Ignored when --no_use_subset.")
     parser.add_argument("--eval_subset_size", type=int, default=25000,
                         help="Eval subset size (default: 25000). Ignored when --no_use_subset.")
-    parser.add_argument("--save_strategy", action="store_true", default=True,
+    parser.add_argument("--save_strategy", action="store_true", default=False,
                         help="Whether to have checkpoints or not")
                         
     return parser.parse_args()
