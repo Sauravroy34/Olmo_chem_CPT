@@ -302,6 +302,10 @@ def main():
     if is_main_process:
         wandb.init(project=wandb_project, name=wandb_run_name)
 
+     
+    if is_main_process:
+        wandb.log({"Train subset size": args.train_subset_size})
+
     tokenizer = setup_tokenizer(args.base_model)
     model = setup_model(args.base_model)
 
